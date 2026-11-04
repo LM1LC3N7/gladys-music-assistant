@@ -1,0 +1,36 @@
+{
+  "name": "gladys-music-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Music Assistant players for Gladys Assistant: browse, search, play, queue, now playing and scene actions (Qobuz, Spotify and every provider set up in Music Assistant), over the local Music Assistant API. Unofficial.",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "node --test --test-timeout=60000",
+    "audit": "npm audit --omit=dev",
+    "cover": "node scripts/cover.mjs cover.png"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LM1LC3N7/gladys-music-assistant.git"
+  },
+  "dependencies": {
+    "@gladysassistant/integration-sdk": "^0.16.0",
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.12.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9"
+  },
+  "license": "Apache-2.0"
+}
