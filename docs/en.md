@@ -121,7 +121,7 @@ by default, 100 = no cap):
   queue, play by search), **unmuting** or **adding a player to a group**, the
   integration brings down to the cap the player set louder in Music
   Assistant, **the members of its group** and, when it plays in a group, its
-  leader and the other members;
+  leader and the other members; an offline member is skipped;
 - an unknown volume is read again from Music Assistant; still unknown,
   nothing is started ("volume is unknown"); when lowering fails, nothing is
   started either.
@@ -183,10 +183,14 @@ the player directly:
    and chooses this way:
    - the **type** Music Assistant gives: album (never a single, EP, live,
      compilation nor soundtrack **when Music Assistant types them so**);
-   - **words of the title**: "Best of", "Greatest Hits", "Les plus grands
-     succès", "Collection", "Anthology", "Essentials", "Bande originale",
-     "Soundtrack", "OST" leave an album out; so do "Live at…", "(Live)",
-     "En concert", "Unplugged" (a studio album named "Live Forever" stays);
+   - **words of the title**, only in a telltale form: "Greatest Hits", "Les
+     plus grands succès", "Original Motion Picture Soundtrack", "Bande
+     originale du film" anywhere; "Best Of", "Collection", "Anthology",
+     "Essentials", "L'essentiel", "Soundtrack" as the whole title, in
+     brackets, after " - ", or next to the artist name ("The Essential Céline
+     Dion"); "(OST)", "(B.O.)" in brackets; "Live at…", "Live à…", "(Live)",
+     "En concert", "Unplugged" for a live. "Live Forever", "Live in Love",
+     "Best of Me" or "Essential Love" stay studio albums;
    - a **reissue** (remaster, deluxe, edition…) is left out only when the
      original of the same title is in the list: a new album out only as a
      "Deluxe Edition" stays;

@@ -131,7 +131,8 @@ Aucune commande de l'intégration ne règle un volume au-dessus du plafond
   sauter dans la file, jouer par recherche), de **couper la sourdine** ou
   d'**ajouter un lecteur à un groupe**, l'intégration ramène au plafond le
   lecteur réglé plus fort dans Music Assistant, **les membres de son groupe**
-  et, s'il joue dans un groupe, son meneur et les autres membres ;
+  et, s'il joue dans un groupe, son meneur et les autres membres ; un membre
+  hors ligne est ignoré ;
 - un volume inconnu est relu dans Music Assistant ; toujours inconnu, rien
   n'est lancé (message « volume inconnu ») ; si l'abaissement échoue, rien
   n'est lancé non plus.
@@ -195,11 +196,15 @@ utilisent directement le lecteur :
    et choisit ainsi :
    - le **type** donné par Music Assistant : album (jamais single, EP, live,
      compilation ni bande originale **quand Music Assistant les type ainsi**) ;
-   - des **mots du titre** : « Best of », « Greatest Hits », « Les plus grands
-     succès », « Collection », « Anthology », « Essentials », « Bande
-     originale », « Soundtrack », « OST » écartent un album ; « Live at… »,
-     « (Live) », « En concert », « Unplugged » aussi (un album studio nommé
-     « Live Forever » reste) ;
+   - des **mots du titre**, seulement sous une forme révélatrice : « Greatest
+     Hits », « Les plus grands succès », « Original Motion Picture
+     Soundtrack », « Bande originale du film » partout ; « Best Of »,
+     « Collection », « Anthology », « Essentials », « L'essentiel »,
+     « Soundtrack » comme titre entier, entre parenthèses, après « - », ou à
+     côté du nom de l'artiste (« The Essential Céline Dion ») ; « (OST) »,
+     « (B.O.) » entre parenthèses ; « Live at… », « Live à… », « (Live) »,
+     « En concert », « Unplugged » pour un live. « Live Forever », « Live in
+     Love », « Best of Me » ou « Essential Love » restent des albums studio ;
    - une **réédition** (remaster, deluxe, édition…) n'est écartée que si
      l'original du même titre est dans la liste : un nouvel album sorti
      seulement en « Deluxe Edition » reste ;

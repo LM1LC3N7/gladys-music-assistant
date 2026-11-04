@@ -33,7 +33,7 @@ export const MA_ERRORS = Object.freeze({
 export class MaError extends Error {
   /**
    * `code`: unreachable | closed | timeout | protocol | busy | refused |
-   * rejected | setup_required | too_old | too_new | not_ma | forbidden | command.
+   * rejected | unreadable | setup_required | too_old | too_new | not_ma | forbidden | command.
    * `maCode`/`details`: the error of a command, as Music Assistant sent it.
    * `sent`: the command left (Music Assistant may have acted on it).
    */
@@ -200,7 +200,19 @@ export class MaSession extends EventEmitter {
     }
   }
 
+  /**
+   * Every message, under a guard: whatever a message holds, an exception
+   * here only ends this session ("protocol"), never the process.
+   */
   onMessage(data, isBinary) {
+    try {
+      this.readMessage(data, isBinary);
+    } catch {
+      this.fail(new MaError('unreadable'));
+    }
+  }
+
+  readMessage(data, isBinary) {
     this.heard();
     if (this.error) return;
     if (isBinary) {
@@ -224,7 +236,13 @@ export class MaSession extends EventEmitter {
     }
     if (typeof message.event === 'string') {
       // Events before the authentication are not ours to read.
-      if (this.ready) this.emit('event', message);
+      if (this.ready) {
+        try {
+          this.emit('event', message);
+        } catch {
+          // A listener that fails does not end the session (the app logs its own errors).
+        }
+      }
       return;
     }
     if (message.message_id === 'connection' && 'error_code' in message) {
@@ -256,15 +274,18 @@ export class MaSession extends EventEmitter {
         this.fail(new MaError('protocol'));
         return;
       }
-      // One message is bounded by maxPayload; the parts kept, by PARTIAL_ITEMS.
-      entry.parts.push(...message.result);
-      if (entry.parts.length > LIMITS.PARTIAL_ITEMS) entry.parts.length = LIMITS.PARTIAL_ITEMS;
+      // Bounded BEFORE being kept, one item at a time: never `push(...list)`,
+      // whose arguments overflow the stack on a long list.
+      const room = Math.max(0, LIMITS.PARTIAL_ITEMS - entry.parts.length);
+      const count = Math.min(room, message.result.length);
+      for (let i = 0; i < count; i += 1) entry.parts.push(message.result[i]);
       return;
     }
     this.settle(id, entry);
     let result = message.result;
     if (entry.parts.length > 0 && Array.isArray(result)) {
-      result = [...entry.parts, ...result].slice(0, LIMITS.PARTIAL_ITEMS);
+      const room = Math.max(0, LIMITS.PARTIAL_ITEMS - entry.parts.length);
+      result = entry.parts.concat(result.slice(0, room));
     }
     entry.resolve(result);
   }

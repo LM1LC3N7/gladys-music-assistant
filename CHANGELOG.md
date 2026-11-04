@@ -36,9 +36,11 @@ First version, 0.1.0 (not published yet).
 - A time budget per call of Gladys (4.5 s for a command, 8.5 s for the music
   player, 27 s for "play by search"): past it nothing more is sent, so nothing
   starts after Gladys stopped waiting.
-- "The latest album": Music Assistant types plus title words (best-of,
-  compilation, soundtrack, live), a reissue left out only when its original
-  is listed.
+- "The latest album": Music Assistant types plus title words in a telltale
+  form (best-of, compilation, soundtrack, live), a reissue left out only when
+  its original is listed.
+- A message of Music Assistant that cannot be read ends the session (tried
+  again later), never the integration.
 - Configuration buttons: "Test the connection" (version, Qobuz and Spotify,
   music providers, players) and "Find Music Assistant" (mDNS through Gladys).
 - The Docker image carries its manifest as a label, for the developer mode of

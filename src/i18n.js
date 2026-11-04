@@ -53,6 +53,11 @@ export const T = {
       `Music Assistant refused the connection (error ${Number.isInteger(code) ? code : '?'}), not the token: tried again in ${wait(ms).en}.`,
       `Music Assistant a refusé la connexion (erreur ${Number.isInteger(code) ? code : '?'}), pas le jeton : nouvel essai dans ${wait(ms).fr}.`,
     ),
+  unreadable: (ms) =>
+    both(
+      `A message of Music Assistant could not be read: the connection was closed, tried again in ${wait(ms).en}.`,
+      `Un message de Music Assistant n’a pas pu être lu : la connexion a été fermée, nouvel essai dans ${wait(ms).fr}.`,
+    ),
   tooOld: (version, ms) =>
     both(
       `Music Assistant ${version} is too old: version 2.8 or later is needed. Tried again in ${wait(ms).en}.`,

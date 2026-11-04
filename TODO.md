@@ -4,7 +4,8 @@
 
 Version 0.1.0, not published (no tag, no topic: not in the store). Built for
 Louis's tests in developer mode (image `:dev` on GHCR). Review r1 (`high`):
-À CORRIGER, corrections in the commit after b6dd31b (see below); r2 to come.
+À CORRIGER, fixed in ff23518; review r2: À CORRIGER (B3, regression), fixed in the
+next commit; r3 to come.
 
 ## Decisions
 
@@ -125,6 +126,22 @@ real playback at Louis's.
 Mutations r1 (one at a time, whole suite): 31 mutants on B1, B2, I1, I2, I4 and
 the minors, all killed; the redundant slice of the partial parts was removed
 (equivalent mutant).
+
+## Review r2: done and left
+
+Done: B3 (a `partial` part is bounded item by item before being kept, never
+`push(...list)`; `onMessage` under a guard: an exception ends the session as
+"unreadable", never the process; test with 300 000 items), I1 (each path
+that starts sound pinned as an effect with a deadline; budgets tied to the
+core delays and to `timeout_seconds` of the manifest), minor 1 (third member
+and `active_group` tested), minor 2 (an offline member is skipped), minor 4
+(title words only in a telltale form: "Live in Love", "Best of Me",
+"Essential Love", "Music from the Heart", "Ost" stay studio albums).
+
+Left: minor 3, a group player set member by member flattens the balance of
+its members (20 % and 30 % both go to the level asked): to look at with
+Louis's groups. Mutations r2 (one at a time, whole suite): 24 mutants on B3,
+I1 (effect per path, budgets), groups and title forms, all killed.
 
 ## Later
 

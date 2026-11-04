@@ -145,31 +145,33 @@ export function pickBest(items, query, { domain, providers } = {}) {
 /** Album types kept: a studio album (or one Music Assistant could not type). */
 const ALBUM_TYPES = new Set(['album', 'unknown']);
 const word = (body) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${body})(?![\\p{L}\\p{N}])`, 'iu');
-/** A best-of, a compilation or a soundtrack typed as an album. */
-const COMPILATION = word(
+/**
+ * Words of a best-of, a compilation or a soundtrack that count wherever
+ * they are: rare in the title of a studio album.
+ */
+const COMPILATION_ALWAYS = word(
   [
-    'best of',
-    'the very best',
     'greatest hits',
     '(?:les )?plus grands succ[eè]s',
-    'grands succ[eè]s',
-    'collection',
-    'anthology',
-    'anthologie',
-    'essentials?',
-    "l['’]essentiel",
-    'int[ée]grale',
-    'soundtrack',
-    'bande originale',
-    'b\\.o\\.?',
-    'ost',
     'original motion picture',
-    'music from the',
+    'motion picture soundtrack',
+    'music from the (?:motion picture|film|movie|series)',
+    'bande originale du film',
   ].join('|'),
 );
-/** A live album typed as an album: "Live at …", "(Live)", "En concert", "Unplugged". */
+/**
+ * Words that count only in a telltale form: the whole title ("Best Of",
+ * "The Collection"), a part in brackets or after " - " ("(OST)"), or next to
+ * the name of the artist ("The Essential Céline Dion"). "Best of Me" or
+ * "Essential Love" stay studio albums.
+ */
+const COMPILATION_FORM =
+  /^(?:the |l )?(?:very )?(?:best of|collection|anthology|anthologie|essentials?|essentiel|integrale|soundtrack|bande originale)$/u;
+/** Abbreviations that count only in brackets or after " - " ("Ost" alone is a word). */
+const COMPILATION_TAG = /^(?:b o|ost)$/u;
+/** Live forms that count wherever they are: "Live at …", "En concert", "Unplugged". */
 const LIVE = word(
-  'live (?:at|in|from|on|à|au|aux|en|de)|en concert|in concert|unplugged|en public|live 19\\d\\d|live 20\\d\\d',
+  'live (?:at|from|au|aux|à)|en concert|in concert|unplugged|en public|live 19\\d\\d|live 20\\d\\d',
 );
 const LIVE_TAG = /[([](?:[^)\]]*\s)?live(?:\s[^)\]]*)?[)\]]|\s[-–]\s*live\s*$/iu;
 /** A reissue or a special edition of an album. */
@@ -178,10 +180,39 @@ const REISSUE = word(
 );
 
 const titleOf = (album) => `${album?.name ?? ''} ${album?.version ?? ''}`;
-export const isCompilation = (album) =>
-  album?.album_type === 'compilation' ||
-  album?.album_type === 'soundtrack' ||
-  COMPILATION.test(titleOf(album));
+/** The parts of a title that may carry a telltale form: in brackets, after " - " or ":". */
+function titleParts(name) {
+  const parts = [...name.matchAll(/[([]([^)\]]{1,120})[)\]]/g)].map((m) => m[1]);
+  const tail = /\s[-–:]\s(.{1,120})$/u.exec(name);
+  if (tail) parts.push(tail[1]);
+  return parts;
+}
+
+/** A title without years, volume numbers and numbers ("Best Of 1990-2000 Vol. 2" -> "best of"). */
+const bare = (text) =>
+  normalizeName(text)
+    .replace(/(?<![\p{L}\p{N}])(?:vol(?:ume)?\s*)?\d+(?![\p{L}\p{N}])/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+export function isCompilation(album) {
+  if (album?.album_type === 'compilation' || album?.album_type === 'soundtrack') return true;
+  const name = String(album?.name ?? '');
+  const version = String(album?.version ?? '');
+  if (COMPILATION_ALWAYS.test(`${name} ${version}`)) return true;
+  if ([name, version].some((part) => COMPILATION_FORM.test(bare(part)))) return true;
+  const parts = [...titleParts(name), version].map(bare);
+  if (parts.some((part) => COMPILATION_FORM.test(part) || COMPILATION_TAG.test(part))) return true;
+  // "The Essential Céline Dion", "Céline Dion Anthology": the form plus the artist name.
+  const whole = bare(name);
+  for (const artist of Array.isArray(album?.artists) ? album.artists.slice(0, 5) : []) {
+    const artistName = normalizeName(artist?.name);
+    if (artistName && whole.includes(artistName)) {
+      if (COMPILATION_FORM.test(bare(whole.replace(artistName, ' ')))) return true;
+    }
+  }
+  return false;
+}
 export const isLive = (album) =>
   album?.album_type === 'live' ||
   LIVE.test(titleOf(album)) ||

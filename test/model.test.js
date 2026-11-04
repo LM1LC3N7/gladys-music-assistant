@@ -113,7 +113,14 @@ test('reissues, lives and compilations are told apart by type and title words, i
   ]) {
     assert.ok(isLive({ name }), name);
   }
-  for (const name of ['Live Forever', 'Alive', 'Delivery', 'Olivia', 'Liveliness']) {
+  for (const name of [
+    'Live Forever',
+    'Live in Love',
+    'Alive',
+    'Delivery',
+    'Olivia',
+    'Liveliness',
+  ]) {
     assert.ok(!isLive({ name }), name);
   }
   assert.ok(isLive({ name: 'X', album_type: 'live' }));
@@ -130,12 +137,27 @@ test('reissues, lives and compilations are told apart by type and title words, i
     'Titanic (Original Motion Picture Soundtrack)',
     'Bande originale du film',
     'Le film (B.O.)',
-    'OST',
+    'Film (OST)',
+    'Best Of 1990-2000 Vol. 2',
   ]) {
-    assert.ok(isCompilation({ name }), name);
+    assert.ok(isCompilation({ name, artists: [{ name: 'Céline Dion' }] }), name);
   }
-  for (const name of ['Courage', 'Ghost', 'Hostile', 'Bestial', 'Collectionneur']) {
-    assert.ok(!isCompilation({ name }), name);
+  // The name of the artist next to a form: a best-of.
+  assert.ok(isCompilation({ name: 'Céline Dion Anthology', artists: [{ name: 'Céline Dion' }] }));
+  assert.ok(!isCompilation({ name: 'The Very Best of Céline Dion', artists: [{ name: 'Zaz' }] }));
+  // A keyword outside a telltale form: a studio album (r2).
+  for (const name of [
+    'Courage',
+    'Ghost',
+    'Hostile',
+    'Bestial',
+    'Collectionneur',
+    'Best of Me',
+    'Essential Love',
+    'Music from the Heart',
+    'Ost',
+  ]) {
+    assert.ok(!isCompilation({ name, artists: [{ name: 'Céline Dion' }] }), name);
   }
   // The types of Music Assistant 2.10.9 (music_assistant_models AlbumType: album,
   // single, live, soundtrack, compilation, ep, unknown).

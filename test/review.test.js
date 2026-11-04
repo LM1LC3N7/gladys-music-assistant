@@ -419,3 +419,145 @@ test('the test clock moves: nothing here relies on the wall clock', () => {
   const clock = testClock();
   assert.notEqual(clock.monotonic(), clock.monotonic());
 });
+
+// --- Review r2 -----------------------------------------------------------------------------
+
+test('a partial part of 300 000 items: bounded before being kept, the process lives', async (t) => {
+  const ma = await fakeMa();
+  const session = new MaSession({ url: `ws://127.0.0.1:${ma.port}/ws`, token: TOKEN });
+  t.after(async () => {
+    await session.close();
+    await ma.close();
+  });
+  ma.handlers['music/browse'] = (_a, srv, { socket, id: messageId }) => {
+    socket.send(
+      JSON.stringify({ message_id: messageId, result: Array(300000).fill(1), partial: true }),
+    );
+    socket.send(
+      JSON.stringify({ message_id: messageId, result: Array(300000).fill(2), partial: false }),
+    );
+    return srv.SILENT;
+  };
+  await session.start();
+  const list = await session.request('music/browse', {}, { timeout: 5000 });
+  assert.equal(list.length, LIMITS.PARTIAL_ITEMS);
+  assert.ok(list.every((x) => x === 1));
+  assert.equal(session.alive, true);
+});
+
+test('an exception while reading a message ends the session ("unreadable"), never the process', async (t) => {
+  const env = await ready(t);
+  const session = env.app.current.session;
+  t.mock.method(session, 'readMessage', () => {
+    throw new RangeError('boom');
+  });
+  env.ma.event('player_updated', SALON, env.ma.players[0]);
+  await until(() => /could not be read/.test(env.status().message.en), 'unreadable');
+  assert.ok(env.logger.lines.some((l) => /a message could not be read/.test(l)));
+});
+
+test('an offline member with an unknown volume does not hold the group', async (t) => {
+  const env = await ready(t, {
+    ma: {
+      players: [
+        player(SALON, 'Salon', { volume_level: 50, group_members: [SALON, CUISINE] }),
+        player(CUISINE, 'Cuisine', { volume_level: null, available: false }),
+      ],
+    },
+  });
+  const ack = await env.gladys.fake.setValue(
+    env.device(SALON),
+    feature(env.device(SALON), 'play'),
+    1,
+  );
+  assert.equal(ack.success, true, ack.error);
+  assert.equal(env.ma.count('players/cmd/play'), 1);
+});
+
+test('playing from a member: the other members of the leader are lowered; active_group alone counts', async (t) => {
+  for (const link of [{ synced_to: 'leader' }, { active_group: 'leader' }]) {
+    const env = await ready(t, {
+      ma: {
+        players: [
+          player('leader', 'Groupe', {
+            volume_level: 40,
+            group_members: ['leader', CUISINE, SALON],
+          }),
+          player(SALON, 'Salon', { volume_level: 85, ...link }),
+          player(CUISINE, 'Cuisine', { volume_level: 20, ...link }),
+        ],
+      },
+    });
+    await env.gladys.fake.setValue(env.device(CUISINE), feature(env.device(CUISINE), 'play'), 1);
+    assert.deepEqual(
+      env.ma.received.filter((r) => r.command === 'players/cmd/volume_set').map((r) => r.args),
+      [{ player_id: SALON, volume_level: 60 }],
+      JSON.stringify(link),
+    );
+  }
+});
+
+test('every command that starts sound is an effect: sent only with time left in its budget', async (t) => {
+  const env = await ready(t);
+  const sent = [];
+  const original = env.app.send.bind(env.app);
+  t.mock.method(env.app, 'send', (cur, command, args, options = {}) => {
+    sent.push([command, options.effect === true, Boolean(options.deadline)]);
+    return original(cur, command, args, options);
+  });
+  const salon = env.device(SALON);
+  await env.gladys.fake.musicPlay(salon, { id: 'library://album/21', type: 'album' }, 'replace');
+  await env.gladys.fake.musicQueuePlay(salon, 2);
+  await env.gladys.fake.setValue(salon, feature(salon, 'next'), 1);
+  await env.gladys.fake.setValue(salon, feature(salon, 'previous'), 1);
+  await env.gladys.fake.setValue(salon, feature(salon, 'play'), 1);
+  await env.gladys.fake.setValue(salon, feature(salon, 'playback_state'), 1);
+  await env.gladys.fake.setValue(salon, feature(salon, 'mute'), 0);
+  await env.gladys.fake.sceneAction('play_search', {
+    device: id(SALON),
+    query: 'Courage',
+    kind: 'album',
+  });
+  await env.gladys.fake.sceneAction('group', { device: id(CUISINE), member: id(SALON) });
+  const effects = [
+    'player_queues/play_media',
+    'player_queues/play_index',
+    'players/cmd/next',
+    'players/cmd/previous',
+    'players/cmd/play',
+    'players/cmd/volume_mute',
+    'players/cmd/group',
+  ];
+  for (const command of effects) {
+    const calls = sent.filter(([c]) => c === command);
+    assert.ok(calls.length > 0, command);
+    for (const [, effect, deadline] of calls) assert.ok(effect && deadline, command);
+  }
+  assert.equal(sent.filter(([c]) => c === 'player_queues/play_media').length, 2);
+});
+
+test('every budget ends before Gladys stops waiting (core delays, timeout_seconds of the manifest)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const manifest = JSON.parse(
+    readFileSync(new URL('../gladys-assistant-integration.json', import.meta.url), 'utf8'),
+  );
+  const timeout = (list, key) => list.find((a) => a.key === key).timeout_seconds * 1000;
+  // The core waits 5 s for a command and 10 s for a music handler.
+  assert.ok(TIMINGS.COMMAND_BUDGET < 5000);
+  assert.ok(TIMINGS.MUSIC_BUDGET < 10000);
+  assert.ok(TIMINGS.SCENE_BUDGET < timeout(manifest.scene_actions, 'play_search'));
+  assert.ok(TIMINGS.VOLUME_BUDGET < timeout(manifest.scene_actions, 'set_volume'));
+  assert.ok(TIMINGS.GROUP_BUDGET < timeout(manifest.scene_actions, 'group'));
+  assert.ok(TIMINGS.GROUP_BUDGET < timeout(manifest.scene_actions, 'ungroup'));
+  assert.ok(TIMINGS.TEST_BUDGET < timeout(manifest.actions, 'test_connection'));
+  // Room for one effect after a slow step, inside every budget.
+  for (const budget of [
+    'COMMAND_BUDGET',
+    'MUSIC_BUDGET',
+    'SCENE_BUDGET',
+    'VOLUME_BUDGET',
+    'GROUP_BUDGET',
+  ]) {
+    assert.ok(TIMINGS[budget] > TIMINGS.EFFECT_MIN * 2, budget);
+  }
+});

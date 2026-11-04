@@ -404,7 +404,12 @@ export class MusicAssistantApp {
     };
     this.current = cur;
     session.on('event', (event) => {
-      if (this.isCurrent(cur)) this.onEvent(cur, event);
+      if (!this.isCurrent(cur)) return;
+      try {
+        this.onEvent(cur, event);
+      } catch (err) {
+        this.logger.warn(`music-assistant: an event was not read (${err?.name ?? 'Error'})`);
+      }
     });
     session.on('closed', (err) => {
       if (this.isCurrent(cur)) this.onClosed(cur, err);
@@ -503,6 +508,7 @@ export class MusicAssistantApp {
     let status;
     if (err.code === 'setup_required') status = T.setupRequired(delay);
     else if (err.code === 'not_ma' || err.code === 'protocol') status = T.notMa(address, delay);
+    else if (err.code === 'unreadable') status = T.unreadable(delay);
     else if (err.code === 'too_old') status = T.tooOld(err.details ?? '?', delay);
     else if (err.code === 'too_new') status = T.tooNew(err.details ?? '?', delay);
     else if (err.code === 'forbidden') status = T.forbidden(delay);
@@ -511,7 +517,7 @@ export class MusicAssistantApp {
     else status = T.unreachable(address, delay);
     this.lossStatus = status;
     this.logger.warn(
-      `music-assistant: ${wasReady ? 'connection lost' : 'no session'} (${err.code}), tried again in ${Math.round(delay / 1000)} s`,
+      `music-assistant: ${wasReady ? 'connection lost' : 'no session'} (${err.code === 'unreadable' ? 'a message could not be read' : err.code}), tried again in ${Math.round(delay / 1000)} s`,
     );
     this.setStatus(false, status);
     this.retryTimer = this.timers.setTimeout(() => {
@@ -844,6 +850,8 @@ export class MusicAssistantApp {
         }
       }
       if (!target.canVolume) continue;
+      // An offline member does not sound: it never holds the group.
+      if (id !== player.id && !target.available) continue;
       if (target.volume === undefined) throw fail(T.volumeUnknown(target.name));
       if (target.volume <= this.cap) continue;
       await this.send(
