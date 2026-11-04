@@ -150,3 +150,11 @@ I1 (effect per path, budgets), groups and title forms, all killed.
 - Option « fournisseurs de recherche » pour le widget.
 - Tests contre la bêta 2.11 avant chaque release (schéma 102 en dev).
 - `keywords` / `countries` du manifeste.
+
+## Next patch (review r3, minors)
+
+- An offline group member at 95 % is not lowered: if it comes back during playback it plays at its
+  Music Assistant volume, above the cap. Lower it when it comes back online (player_updated).
+- Album names longer than 200 characters: cut before the title regexes (a hostile server could stall
+  the event loop about 33 s with 200 000 parentheses).
+- Untested: target player offline; two nested try/catch overlap (3 surviving mutants).
