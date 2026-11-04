@@ -111,6 +111,7 @@ export function commandError(err) {
   if (!(err instanceof MaError)) return err instanceof Error ? err : fail(String(err));
   if (err.code === 'busy') return fail(T.busy);
   if (err.code === 'timeout' && err.sent) return fail(T.noAnswer);
+  if (err.sent) return fail(T.sentClosed);
   if (err.code === 'command') {
     if (err.maCode === MA_ERRORS.INSUFFICIENT_PERMISSIONS) return fail(T.permission);
     return fail(T.failed(err.details));
@@ -239,6 +240,9 @@ export class MusicAssistantApp {
   configUpdated(raw) {
     this.connection += 1;
     this.clearConfigTimer();
+    // Saving the form is a request to try: a refusal remembered is forgotten
+    // (its 2-hex marker could match a new token, 1 time in 256).
+    this.forgetRefusal = true;
     return this.start(raw);
   }
 
@@ -310,6 +314,8 @@ export class MusicAssistantApp {
 
   async doStart(raw) {
     if (this.stopped) return;
+    const forget = this.forgetRefusal;
+    this.forgetRefusal = false;
     const config = normalizeConfig(raw);
     const changed = this.config === undefined || sessionKey(config) !== sessionKey(this.config);
     this.config = config;
@@ -326,8 +332,11 @@ export class MusicAssistantApp {
       return;
     }
     if (changed || !this.current) {
-      if (changed && this.refusedMarker !== undefined && !this.wasRefused(config.token)) {
-        // A new token: the refusal of the old one is forgotten.
+      if (
+        this.refusedMarker !== undefined &&
+        (forget || (changed && !this.wasRefused(config.token)))
+      ) {
+        // A new token, or the form saved: the refusal is forgotten.
         await this.saveRefused(undefined);
       }
       await this.closeSession();
@@ -453,7 +462,7 @@ export class MusicAssistantApp {
     for (const raw of Array.isArray(queues) ? queues : []) this.applyQueue(cur, raw);
     this.applyProviders(cur, providers);
     cur.ready = true;
-    this.retryDelay = TIMINGS.RETRY_MIN;
+    cur.readyAt = this.monotonic();
     if (this.refusedMarker !== undefined) await this.saveRefused(undefined);
     if (!this.isCurrent(cur)) return;
     const domains = [
@@ -484,6 +493,11 @@ export class MusicAssistantApp {
       this.setStatus(false, T.refused);
       return;
     }
+    // The backoff starts again from 2 s only after a session that lived:
+    // a server that accepts then drops at once is not called every 2 s.
+    if (wasReady && this.monotonic() - cur.readyAt >= TIMINGS.STABLE) {
+      this.retryDelay = TIMINGS.RETRY_MIN;
+    }
     const delay = this.retryDelay;
     this.retryDelay = Math.min(delay * 2, TIMINGS.RETRY_MAX);
     let status;
@@ -492,6 +506,7 @@ export class MusicAssistantApp {
     else if (err.code === 'too_old') status = T.tooOld(err.details ?? '?', delay);
     else if (err.code === 'too_new') status = T.tooNew(err.details ?? '?', delay);
     else if (err.code === 'forbidden') status = T.forbidden(delay);
+    else if (err.code === 'rejected') status = T.rejected(err.maCode, delay);
     else if (wasReady) status = T.lost(delay);
     else status = T.unreachable(address, delay);
     this.lossStatus = status;
@@ -775,9 +790,33 @@ export class MusicAssistantApp {
     throw fail(T.unknownPlayer);
   }
 
-  async send(cur, command, args, options = {}) {
+  /** The end of the budget of one call of Gladys (monotonic clock). */
+  deadline(ms) {
+    return { at: this.monotonic() + ms };
+  }
+
+  /**
+   * Sends one command within the budget `deadline`: its timeout is at most
+   * what is left; with too little left, nothing is sent (an `effect` needs
+   * EFFECT_MIN, a read READ_MIN). Urgent commands (pause, stop, mute, a lower
+   * volume) are never held, only bounded.
+   */
+  async send(
+    cur,
+    command,
+    args,
+    { deadline, effect = false, urgent = false, timeout = TIMINGS.COMMAND } = {},
+  ) {
+    let wait = timeout;
+    if (deadline) {
+      const left = deadline.at - this.monotonic();
+      if (!urgent && left < (effect ? TIMINGS.EFFECT_MIN : TIMINGS.READ_MIN)) {
+        throw fail(T.tooLate);
+      }
+      wait = Math.max(1, Math.min(timeout, left));
+    }
     try {
-      return await cur.session.request(command, args, options);
+      return await cur.session.request(command, args, { timeout: wait, urgent });
     } catch (err) {
       throw commandError(err);
     }
@@ -793,18 +832,98 @@ export class MusicAssistantApp {
    * volume above the cap is brought down to it first. When it cannot be
    * lowered, nothing is played.
    */
-  async lowerToCap(cur, player) {
-    if (!player.canVolume || player.volume === undefined || player.volume <= this.cap) return;
-    await this.send(
+  async lowerToCap(cur, player, deadline) {
+    for (const id of this.soundingIds(cur, player)) {
+      let target = cur.players.get(id);
+      if (!target || (target.canVolume && target.volume === undefined)) {
+        // Not in the picture, or its volume unknown: read again, never guessed.
+        target = await this.readAgain(cur, id, deadline);
+        if (!target) {
+          if (id === player.id) throw fail(T.unknownPlayer);
+          continue; // a member Music Assistant does not know any more does not sound
+        }
+      }
+      if (!target.canVolume) continue;
+      if (target.volume === undefined) throw fail(T.volumeUnknown(target.name));
+      if (target.volume <= this.cap) continue;
+      await this.send(
+        cur,
+        'players/cmd/volume_set',
+        { player_id: target.id, volume_level: this.cap },
+        { urgent: true, deadline },
+      );
+      target.volume = this.cap;
+    }
+  }
+
+  /**
+   * The players a command on `player` may make sound: itself, its group
+   * members, and when it plays in a group, the leader and its members.
+   */
+  soundingIds(cur, player) {
+    const ids = new Set([player.id, ...player.members]);
+    const leaderId = player.syncedTo ?? player.activeGroup;
+    if (leaderId && leaderId !== player.id) {
+      ids.add(leaderId);
+      for (const id of cur.players.get(leaderId)?.members ?? []) ids.add(id);
+    }
+    return [...ids].slice(0, LIMITS.GROUP_MEMBERS + 1);
+  }
+
+  /** A player read again from Music Assistant (and kept in the picture), or undefined. */
+  async readAgain(cur, id, deadline) {
+    const raw = await this.send(
       cur,
-      'players/cmd/volume_set',
-      { player_id: player.id, volume_level: this.cap },
-      { urgent: true },
+      'players/get',
+      { player_id: id },
+      { deadline, timeout: TIMINGS.COMMAND },
     );
-    player.volume = this.cap;
+    const player = readPlayer(raw);
+    if (!player || player.id !== id) return undefined;
+    if (this.isCurrent(cur) && cur.players.has(id)) cur.players.set(id, player);
+    return player;
+  }
+
+  /**
+   * Sets a volume, capped: on a group player of Music Assistant (its
+   * own volume moves its members by MA's rules), every member is set
+   * instead, so none goes above the cap. Returns the level set.
+   */
+  async applyVolume(cur, player, asked, deadline) {
+    // Rounded down, then capped: never one step above what was asked or allowed.
+    const level = Math.min(Math.floor(asked), this.cap);
+    const targets =
+      player.type === 'group' && player.members.length > 0 ? player.members : [player.id];
+    for (const id of targets) {
+      const known = cur.players.get(id);
+      const lower = known?.volume === undefined || level <= known.volume;
+      await this.send(
+        cur,
+        'players/cmd/volume_set',
+        { player_id: id, volume_level: level },
+        { urgent: lower, effect: !lower, deadline },
+      );
+    }
+    if (level < asked) this.republishVolume(player, level);
+    return level;
+  }
+
+  /**
+   * A capped write may change nothing in Music Assistant (already at the
+   * cap): the volume is published again so that Gladys sees the answer.
+   */
+  republishVolume(player, level) {
+    const device = this.createdDevices().get(playerKey(player.id));
+    if (!device || this.gladysDown) return;
+    this.gladys.publishState(`${device.external_id}:${FEATURE.VOLUME}`, level).catch((err) => {
+      this.logger.warn(
+        `music-assistant: volume not published (${err?.status ?? err?.name ?? 'Error'})`,
+      );
+    });
   }
 
   async setValue(device, deviceFeature, value) {
+    const deadline = this.deadline(TIMINGS.COMMAND_BUDGET);
     const cur = this.session();
     const player = this.playerOf(cur, device?.external_id);
     const key = featureKey(deviceFeature?.external_id);
@@ -817,31 +936,27 @@ export class MusicAssistantApp {
         if (state === undefined) throw fail(T.badValue);
         if (state === 0) return this.send(cur, 'players/cmd/pause', id, { urgent: true });
         if (state === 2) return this.send(cur, 'players/cmd/stop', id, { urgent: true });
-        await this.lowerToCap(cur, player);
-        return this.send(cur, 'players/cmd/play', id);
+        await this.lowerToCap(cur, player, deadline);
+        return this.send(cur, 'players/cmd/play', id, { effect: true, deadline });
       }
       case FEATURE.PLAY:
-        await this.lowerToCap(cur, player);
-        return this.send(cur, 'players/cmd/play', id);
+        await this.lowerToCap(cur, player, deadline);
+        return this.send(cur, 'players/cmd/play', id, { effect: true, deadline });
       case FEATURE.PAUSE:
         return this.send(cur, 'players/cmd/pause', id, { urgent: true });
+      // Previous and next start the playback of a paused player in Music
+      // Assistant: under the cap first, like play.
       case FEATURE.PREVIOUS:
-        return this.send(cur, 'players/cmd/previous', id);
+        await this.lowerToCap(cur, player, deadline);
+        return this.send(cur, 'players/cmd/previous', id, { effect: true, deadline });
       case FEATURE.NEXT:
-        return this.send(cur, 'players/cmd/next', id);
+        await this.lowerToCap(cur, player, deadline);
+        return this.send(cur, 'players/cmd/next', id, { effect: true, deadline });
       case FEATURE.VOLUME: {
         if (!player.canVolume) throw fail(T.noVolume);
         const asked = numberOf(value, { integer: false, min: 0, max: 100 });
         if (asked === undefined) throw fail(T.badValue);
-        // Rounded down, then capped: never one step above what was asked or allowed.
-        const level = Math.min(Math.floor(asked), this.cap);
-        const lower = player.volume === undefined || level <= player.volume;
-        await this.send(
-          cur,
-          'players/cmd/volume_set',
-          { ...id, volume_level: level },
-          { urgent: lower },
-        );
+        await this.applyVolume(cur, player, asked, deadline);
         return undefined;
       }
       case FEATURE.MUTE: {
@@ -856,29 +971,43 @@ export class MusicAssistantApp {
             { urgent: true },
           );
         }
-        await this.lowerToCap(cur, player);
-        return this.send(cur, 'players/cmd/volume_mute', { ...id, muted: false });
+        await this.lowerToCap(cur, player, deadline);
+        return this.send(
+          cur,
+          'players/cmd/volume_mute',
+          { ...id, muted: false },
+          { effect: true, deadline },
+        );
       }
       case FEATURE.POSITION: {
         const position = numberOf(value, { integer: false, min: 0, max: 604800 });
         if (position === undefined) throw fail(T.badValue);
-        return this.send(cur, 'players/cmd/seek', { ...id, position: Math.floor(position) });
+        return this.send(
+          cur,
+          'players/cmd/seek',
+          { ...id, position: Math.floor(position) },
+          { effect: true, deadline },
+        );
       }
       case FEATURE.SHUFFLE: {
         const on = numberOf(value, { min: 0, max: 1 });
         if (on === undefined) throw fail(T.badValue);
-        return this.send(cur, 'player_queues/shuffle', {
-          queue_id: queueId,
-          shuffle_enabled: on === 1,
-        });
+        return this.send(
+          cur,
+          'player_queues/shuffle',
+          { queue_id: queueId, shuffle_enabled: on === 1 },
+          { deadline },
+        );
       }
       case FEATURE.REPEAT: {
         const mode = numberOf(value, { min: 0, max: 2 });
         if (mode === undefined) throw fail(T.badValue);
-        return this.send(cur, 'player_queues/repeat', {
-          queue_id: queueId,
-          repeat_mode: REPEAT_MODES[mode],
-        });
+        return this.send(
+          cur,
+          'player_queues/repeat',
+          { queue_id: queueId, repeat_mode: REPEAT_MODES[mode] },
+          { deadline },
+        );
       }
       default:
         throw fail(T.badValue);
@@ -903,22 +1032,23 @@ export class MusicAssistantApp {
   }
 
   async musicBrowse(device, { parentId, offset = 0, limit = 50 } = {}) {
+    const deadline = this.deadline(TIMINGS.MUSIC_BUDGET);
     const cur = this.session();
     this.playerOf(cur, device?.external_id);
     let items;
     if (parentId === null || parentId === undefined || parentId === '') {
       items = this.mapItems(
         cur,
-        await this.send(cur, 'music/browse', {}, { timeout: TIMINGS.MUSIC }),
+        await this.send(cur, 'music/browse', {}, { timeout: TIMINGS.MUSIC, deadline }),
       );
     } else if (String(parentId).startsWith(FOLDER_PREFIX)) {
       const path = String(parentId).slice(FOLDER_PREFIX.length);
       items = this.mapItems(
         cur,
-        await this.send(cur, 'music/browse', { path }, { timeout: TIMINGS.MUSIC }),
+        await this.send(cur, 'music/browse', { path }, { timeout: TIMINGS.MUSIC, deadline }),
       );
     } else {
-      items = await this.browseItem(cur, String(parentId));
+      items = await this.browseItem(cur, String(parentId), deadline);
     }
     const start = Math.max(0, Number.isInteger(offset) ? offset : 0);
     const size = Math.min(LIMITS.MUSIC_ITEMS, Math.max(1, Number.isInteger(limit) ? limit : 50));
@@ -926,7 +1056,7 @@ export class MusicAssistantApp {
   }
 
   /** The children of a media item: an artist's albums (latest first), an album's or a playlist's tracks. */
-  async browseItem(cur, uri) {
+  async browseItem(cur, uri, deadline) {
     const match = /^([a-z0-9_-]+(?:--[A-Za-z0-9_-]+)?):\/\/(artist|album|playlist)\/(.+)$/.exec(
       uri,
     );
@@ -934,26 +1064,34 @@ export class MusicAssistantApp {
     const [, provider, type, itemId] = match;
     const args = { item_id: itemId, provider_instance_id_or_domain: provider };
     if (type === 'artist') {
-      const albums = await this.artistAlbums(cur, { uri, provider, item_id: itemId });
+      const albums = await this.artistAlbums(
+        cur,
+        { uri, provider, item_id: itemId },
+        undefined,
+        deadline,
+      );
       return this.mapItems(cur, sortByYear(albums));
     }
     const command =
       type === 'album' ? 'music/albums/album_tracks' : 'music/playlists/playlist_tracks';
-    return this.mapItems(cur, await this.send(cur, command, args, { timeout: TIMINGS.MUSIC }));
+    return this.mapItems(
+      cur,
+      await this.send(cur, command, args, { timeout: TIMINGS.MUSIC, deadline }),
+    );
   }
 
   /**
    * The albums of an artist: those of its provider (the preferred one first)
    * when it is a library artist, else the library's.
    */
-  async artistAlbums(cur, artist, domain) {
+  async artistAlbums(cur, artist, domain, deadline) {
     let item = artist;
     if (artist.provider === 'library' && !Array.isArray(artist.provider_mappings)) {
       item = await this.send(
         cur,
         'music/item_by_uri',
         { uri: artist.uri },
-        { timeout: TIMINGS.MUSIC },
+        { timeout: TIMINGS.MUSIC, deadline },
       );
     }
     let refs = providerRefs(item, cur.providers);
@@ -963,7 +1101,7 @@ export class MusicAssistantApp {
         cur,
         'music/artists/artist_albums',
         { item_id: ref.itemId, provider_instance_id_or_domain: ref.provider },
-        { timeout: TIMINGS.MUSIC },
+        { timeout: TIMINGS.MUSIC, deadline },
       );
       if (Array.isArray(albums) && albums.length > 0) return albums;
     }
@@ -975,7 +1113,7 @@ export class MusicAssistantApp {
           item_id: String(item?.item_id ?? artist.item_id),
           provider_instance_id_or_domain: 'library',
         },
-        { timeout: TIMINGS.MUSIC },
+        { timeout: TIMINGS.MUSIC, deadline },
       );
       if (Array.isArray(albums)) return albums;
     }
@@ -983,6 +1121,7 @@ export class MusicAssistantApp {
   }
 
   async musicSearch(device, { query, type = null, limit = 50 } = {}) {
+    const deadline = this.deadline(TIMINGS.MUSIC_BUDGET);
     const cur = this.session();
     this.playerOf(cur, device?.external_id);
     const text = cleanText(query, 200);
@@ -998,7 +1137,7 @@ export class MusicAssistantApp {
         media_types: types,
         limit: Math.min(size, LIMITS.SEARCH_PER_TYPE),
       },
-      { timeout: TIMINGS.MUSIC },
+      { timeout: TIMINGS.MUSIC, deadline },
     );
     const lists = isPlain(result) ? result : {};
     const ordered = [
@@ -1018,6 +1157,7 @@ export class MusicAssistantApp {
   }
 
   async musicPlay(device, media, mode = 'replace') {
+    const deadline = this.deadline(TIMINGS.MUSIC_BUDGET);
     const cur = this.session();
     const player = this.playerOf(cur, device?.external_id);
     const uri = typeof media?.id === 'string' ? media.id : '';
@@ -1031,28 +1171,34 @@ export class MusicAssistantApp {
     }
     const option = PLAY_OPTIONS[mode ?? 'replace'];
     if (!option) throw fail(T.badValue);
-    await this.lowerToCap(cur, player);
+    await this.lowerToCap(cur, player, deadline);
     await this.send(
       cur,
       'player_queues/play_media',
       { queue_id: player.id, media: uri, option },
-      { timeout: TIMINGS.MUSIC },
+      { timeout: TIMINGS.MUSIC, effect: true, deadline },
     );
   }
 
   async musicQueueGet(device, { offset = 0, limit = 50 } = {}) {
+    const deadline = this.deadline(TIMINGS.MUSIC_BUDGET);
     const cur = this.session();
     const player = this.playerOf(cur, device?.external_id);
     const queueId = this.queueIdOf(cur, player);
     const start = Math.max(0, Number.isInteger(offset) ? offset : 0);
     const size = Math.min(LIMITS.MUSIC_ITEMS, Math.max(1, Number.isInteger(limit) ? limit : 50));
     const [rawQueue, entries] = await Promise.all([
-      this.send(cur, 'player_queues/get', { queue_id: queueId }, { timeout: TIMINGS.MUSIC }),
+      this.send(
+        cur,
+        'player_queues/get',
+        { queue_id: queueId },
+        { timeout: TIMINGS.MUSIC, deadline },
+      ),
       this.send(
         cur,
         'player_queues/items',
         { queue_id: queueId, limit: size, offset: start },
-        { timeout: TIMINGS.MUSIC },
+        { timeout: TIMINGS.MUSIC, deadline },
       ),
     ]);
     const queue = readQueue(rawQueue);
@@ -1069,15 +1215,16 @@ export class MusicAssistantApp {
   }
 
   async musicQueuePlay(device, index) {
+    const deadline = this.deadline(TIMINGS.MUSIC_BUDGET);
     const cur = this.session();
     const player = this.playerOf(cur, device?.external_id);
     if (!Number.isInteger(index) || index < 0) throw fail(T.queueIndex);
-    await this.lowerToCap(cur, player);
+    await this.lowerToCap(cur, player, deadline);
     await this.send(
       cur,
       'player_queues/play_index',
       { queue_id: this.queueIdOf(cur, player), index },
-      { timeout: TIMINGS.MUSIC },
+      { timeout: TIMINGS.MUSIC, effect: true, deadline },
     );
   }
 
@@ -1150,7 +1297,7 @@ export class MusicAssistantApp {
    * The best item of a kind: on the preferred provider first (its library
    * items included), then on every provider. `{ item, domain }`.
    */
-  async findBest(cur, mediaType, query, domain) {
+  async findBest(cur, mediaType, query, domain, deadline) {
     const search = (providers) =>
       this.send(
         cur,
@@ -1161,7 +1308,7 @@ export class MusicAssistantApp {
           limit: 10,
           ...(providers ? { providers } : {}),
         },
-        { timeout: TIMINGS.MUSIC },
+        { timeout: TIMINGS.MUSIC, deadline },
       );
     const listOf = (result) =>
       isPlain(result) && Array.isArray(result[RESULT_KEYS[mediaType]])
@@ -1188,6 +1335,7 @@ export class MusicAssistantApp {
   }
 
   async playSearch(fields = {}) {
+    const deadline = this.deadline(TIMINGS.SCENE_BUDGET);
     const cur = this.session();
     const player = this.playerOf(cur, fields.device);
     const query = cleanText(fields.query, 200);
@@ -1197,13 +1345,13 @@ export class MusicAssistantApp {
     if (!option) throw fail(T.badValue);
     const mediaType = KIND_MEDIA[kind];
     const domain = this.domainOf(cur, fields.provider);
-    const found = await this.findBest(cur, mediaType, query, domain);
+    const found = await this.findBest(cur, mediaType, query, domain, deadline);
     if (!found) throw fail(T.notFound(mediaType, query));
     let { item } = found;
     let uri;
     let year;
     if (kind === KINDS.LATEST_ALBUM) {
-      const albums = await this.artistAlbums(cur, item, found.domain);
+      const albums = await this.artistAlbums(cur, item, found.domain, deadline);
       const latest = pickLatestAlbum(albums);
       if (!latest) {
         if (albums.length > 0) throw fail(T.noYear(cleanText(item.name, 100)));
@@ -1222,12 +1370,12 @@ export class MusicAssistantApp {
       uri = this.uriFor(cur, item, mediaType, found.domain);
     }
     if (uri.length > 2048) throw fail(T.badValue);
-    await this.lowerToCap(cur, player);
+    await this.lowerToCap(cur, player, deadline);
     await this.send(
       cur,
       'player_queues/play_media',
       { queue_id: player.id, media: uri, option },
-      { timeout: TIMINGS.MUSIC },
+      { timeout: TIMINGS.MUSIC, effect: true, deadline },
     );
     if (item.year !== undefined && year === undefined && Number.isInteger(item.year)) {
       year = item.year;
@@ -1240,40 +1388,37 @@ export class MusicAssistantApp {
   }
 
   async setVolume(fields = {}) {
+    const deadline = this.deadline(TIMINGS.VOLUME_BUDGET);
     const cur = this.session();
     const player = this.playerOf(cur, fields.device);
     if (!player.canVolume) throw fail(T.noVolume);
     const asked = numberOf(fields.volume, { integer: false, min: 0, max: 100 });
     if (asked === undefined) throw fail(T.badValue);
-    const level = Math.min(Math.floor(asked), this.cap);
-    const lower = player.volume === undefined || level <= player.volume;
-    await this.send(
-      cur,
-      'players/cmd/volume_set',
-      { player_id: player.id, volume_level: level },
-      { urgent: lower },
-    );
-    return { volume: level };
+    return { volume: await this.applyVolume(cur, player, asked, deadline) };
   }
 
   async group(fields = {}) {
+    const deadline = this.deadline(TIMINGS.GROUP_BUDGET);
     const cur = this.session();
     const leader = this.playerOf(cur, fields.device);
     const member = this.playerOf(cur, fields.member);
     if (leader.id === member.id) throw fail(T.sameGroup);
     // The member plays with the group from now on: never above the cap.
-    await this.lowerToCap(cur, member);
-    await this.send(cur, 'players/cmd/group', {
-      player_id: member.id,
-      target_player: leader.id,
-    });
+    await this.lowerToCap(cur, member, deadline);
+    await this.send(
+      cur,
+      'players/cmd/group',
+      { player_id: member.id, target_player: leader.id },
+      { effect: true, deadline },
+    );
     return undefined;
   }
 
   async ungroup(fields = {}) {
+    const deadline = this.deadline(TIMINGS.GROUP_BUDGET);
     const cur = this.session();
     const player = this.playerOf(cur, fields.device);
-    await this.send(cur, 'players/cmd/ungroup', { player_id: player.id });
+    await this.send(cur, 'players/cmd/ungroup', { player_id: player.id }, { deadline });
     return undefined;
   }
 
@@ -1295,6 +1440,8 @@ export class MusicAssistantApp {
     if (!config || !isConnectable(config)) return T.testNotConfigured;
     this.testing = true;
     this.lastTestAt = at;
+    // The session opens within CONNECT + AUTH (16 s); the lists get what is left of 18 s.
+    const testEnd = at + TIMINGS.TEST_BUDGET;
     const session = this.sessionFactory({
       url: wsUrl(config.server),
       token: config.token,
@@ -1311,14 +1458,16 @@ export class MusicAssistantApp {
           return T.refused;
         }
         if (err?.code === 'setup_required') return T.setupRequired(0);
+        if (err?.code === 'rejected') return T.rejected(err.maCode, 0);
         if (err?.code === 'too_old') return T.tooOld(err.details ?? '?', 0);
         if (err?.code === 'too_new') return T.tooNew(err.details ?? '?', 0);
         if (err?.code === 'not_ma' || err?.code === 'protocol') return T.notMa(config.url, 0);
         return T.unreachable(config.url, 0);
       }
+      const left = Math.max(1, testEnd - this.monotonic());
       const [providers, players] = await Promise.all([
-        session.request('providers', {}, { timeout: TIMINGS.REQUEST }),
-        session.request('players/all', {}, { timeout: TIMINGS.REQUEST }),
+        session.request('providers', {}, { timeout: Math.min(TIMINGS.REQUEST, left) }),
+        session.request('players/all', {}, { timeout: Math.min(TIMINGS.REQUEST, left) }),
       ]).catch((err) => {
         throw commandError(err);
       });

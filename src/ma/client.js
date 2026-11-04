@@ -33,7 +33,7 @@ export const MA_ERRORS = Object.freeze({
 export class MaError extends Error {
   /**
    * `code`: unreachable | closed | timeout | protocol | busy | refused |
-   * setup_required | too_old | too_new | not_ma | command.
+   * rejected | setup_required | too_old | too_new | not_ma | forbidden | command.
    * `maCode`/`details`: the error of a command, as Music Assistant sent it.
    * `sent`: the command left (Music Assistant may have acted on it).
    */
@@ -229,9 +229,10 @@ export class MaSession extends EventEmitter {
     }
     if (message.message_id === 'connection' && 'error_code' in message) {
       // "Setup required": the first user was never created.
+      // Any other error of the welcome is not a refused token: tried again later.
       this.fail(
-        new MaError(message.error_code === 503 ? 'setup_required' : 'refused', {
-          maCode: message.error_code,
+        new MaError(message.error_code === 503 ? 'setup_required' : 'rejected', {
+          maCode: Number.isInteger(message.error_code) ? message.error_code : undefined,
         }),
       );
       return;
@@ -255,7 +256,8 @@ export class MaSession extends EventEmitter {
         this.fail(new MaError('protocol'));
         return;
       }
-      entry.parts.push(...message.result.slice(0, LIMITS.PARTIAL_ITEMS));
+      // One message is bounded by maxPayload; the parts kept, by PARTIAL_ITEMS.
+      entry.parts.push(...message.result);
       if (entry.parts.length > LIMITS.PARTIAL_ITEMS) entry.parts.length = LIMITS.PARTIAL_ITEMS;
       return;
     }

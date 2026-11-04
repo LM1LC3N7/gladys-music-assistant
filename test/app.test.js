@@ -283,8 +283,9 @@ test('pause, stop and mute are never held: no cap, no volume first, past a full 
   await env.ready();
   const device = env.device(SALON);
   env.ma.handlers['players/cmd/next'] = (_a, srv) => srv.SILENT;
+  const cuisine = env.device(CUISINE);
   const stuck = Array.from({ length: 40 }, () =>
-    env.gladys.fake.setValue(device, feature(device, 'next'), 1),
+    env.gladys.fake.setValue(cuisine, feature(cuisine, 'next'), 1),
   );
   await new Promise((r) => setTimeout(r, 50));
   const from = env.ma.received.length;

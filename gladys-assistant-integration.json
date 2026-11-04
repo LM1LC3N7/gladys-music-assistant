@@ -102,8 +102,8 @@
         "fr": "Plafond de volume (%)"
       },
       "description": {
-        "en": "The highest volume Gladys may set, from 1 to 100 (100: no cap). A higher volume asked by a scene or the dashboard is set to this cap; before Gladys starts playback, unmutes or adds a player to a group, a player set louder in Music Assistant is first brought down to the cap. A lower volume, pause, stop and mute are never held by the cap.",
-        "fr": "Le volume le plus fort que Gladys peut régler, de 1 à 100 (100 : pas de plafond). Un volume plus fort demandé par une scène ou le tableau de bord est ramené à ce plafond ; avant que Gladys lance la lecture, coupe la sourdine ou ajoute un lecteur à un groupe, un lecteur réglé plus fort dans Music Assistant est d'abord ramené au plafond. Une baisse de volume, la pause, l'arrêt et la sourdine ne sont jamais retenus par le plafond."
+        "en": "The highest volume Gladys may set, from 1 to 100 (100: no cap). A higher volume asked by a scene or the dashboard is set to this cap; before Gladys starts sound (play, next, previous, play a media…), unmutes or adds a player to a group, the players that would sound louder (group members included) are first brought down to the cap. A lower volume, pause, stop and mute are never held by the cap.",
+        "fr": "Le volume le plus fort que Gladys peut régler, de 1 à 100 (100 : pas de plafond). Un volume plus fort demandé par une scène ou le tableau de bord est ramené à ce plafond ; avant que Gladys lance du son (lecture, suivant, précédent, jouer un média…), coupe la sourdine ou ajoute un lecteur à un groupe, les lecteurs qui joueraient plus fort (membres d'un groupe compris) sont d'abord ramenés au plafond. Une baisse de volume, la pause, l'arrêt et la sourdine ne sont jamais retenus par le plafond."
       }
     },
     {

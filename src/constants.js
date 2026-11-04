@@ -62,8 +62,26 @@ export const TIMINGS = Object.freeze({
   COMMAND: 3 * SECOND,
   /** A search, a browse, a play_media: under the 10 s Gladys gives music handlers. */
   MUSIC: 8 * SECOND,
-  /** A scene action (play_search declares 30 s): several requests in a row. */
-  SCENE_BUDGET: 25 * SECOND,
+  /**
+   * Whole budgets, from the call of Gladys to the last request: every
+   * request gets at most what is left, and nothing is sent once it is spent,
+   * so nothing happens after Gladys gave up waiting. Gladys waits 5 s for a
+   * command, 10 s for a music handler, the declared timeout_seconds for a
+   * scene action (play_search 30 s, set_volume 10 s, group/ungroup 15 s) and
+   * a button (20 s).
+   */
+  COMMAND_BUDGET: 4.5 * SECOND,
+  MUSIC_BUDGET: 8.5 * SECOND,
+  SCENE_BUDGET: 27 * SECOND,
+  VOLUME_BUDGET: 8 * SECOND,
+  GROUP_BUDGET: 13 * SECOND,
+  TEST_BUDGET: 18 * SECOND,
+  /** A command with an effect (play, next, group…) is sent only with this much left. */
+  EFFECT_MIN: 1.5 * SECOND,
+  /** A read is sent only with this much left. */
+  READ_MIN: 0.2 * SECOND,
+  /** A session must have lived this long for the backoff to start again from RETRY_MIN. */
+  STABLE: 60 * SECOND,
   /** An artwork (Gladys waits 15 s). */
   IMAGE: 8 * SECOND,
   /** A WebSocket ping; nothing heard for 2.5 of them closes the session. */
@@ -110,6 +128,8 @@ export const LIMITS = Object.freeze({
   FOUND: 8,
   /** Artist albums lists read for one "latest album". */
   ALBUM_SOURCES: 3,
+  /** Players a command may make sound (a group and its members). */
+  GROUP_MEMBERS: 32,
 });
 
 /** The feature keys (= the Gladys types). */

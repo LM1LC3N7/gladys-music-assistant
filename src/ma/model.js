@@ -134,43 +134,109 @@ export function pickBest(items, query, { domain, providers } = {}) {
   return list.find((item) => normalizeName(item.name) === wanted) ?? list[0];
 }
 
-/** Album types kept for "the latest album": a studio album (or one MA could not type). */
+/**
+ * "The latest album" rests on two things only: the `album_type` Music
+ * Assistant gives (AlbumType of 2.10.9: album, single, live, soundtrack,
+ * compilation, ep, unknown) and words of the title. Both can be wrong: a
+ * provider may type a best-of or a soundtrack as `album`, a live album may
+ * have no telltale word ("Au Palais Omnisports"). The scene says what it
+ * played (title, year, provider) so that a wrong choice shows.
+ */
+/** Album types kept: a studio album (or one Music Assistant could not type). */
 const ALBUM_TYPES = new Set(['album', 'unknown']);
-/** A reissue, a live or a special edition: taken only when nothing else has a year. */
-const REISSUE =
-  /(?<!\p{L})(remaster(ed)?|remasteris[ée]e?|deluxe|anniversary|reissue|r[ée][ée]dition|[ée]dition|live|expanded|collector)(?!\p{L})/iu;
+const word = (body) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${body})(?![\\p{L}\\p{N}])`, 'iu');
+/** A best-of, a compilation or a soundtrack typed as an album. */
+const COMPILATION = word(
+  [
+    'best of',
+    'the very best',
+    'greatest hits',
+    '(?:les )?plus grands succ[eè]s',
+    'grands succ[eè]s',
+    'collection',
+    'anthology',
+    'anthologie',
+    'essentials?',
+    "l['’]essentiel",
+    'int[ée]grale',
+    'soundtrack',
+    'bande originale',
+    'b\\.o\\.?',
+    'ost',
+    'original motion picture',
+    'music from the',
+  ].join('|'),
+);
+/** A live album typed as an album: "Live at …", "(Live)", "En concert", "Unplugged". */
+const LIVE = word(
+  'live (?:at|in|from|on|à|au|aux|en|de)|en concert|in concert|unplugged|en public|live 19\\d\\d|live 20\\d\\d',
+);
+const LIVE_TAG = /[([](?:[^)\]]*\s)?live(?:\s[^)\]]*)?[)\]]|\s[-–]\s*live\s*$/iu;
+/** A reissue or a special edition of an album. */
+const REISSUE = word(
+  'remaster(?:ed)?|remasteris[ée]e?|deluxe|anniversary|reissue|r[ée][ée]dition|[ée]dition|edition|expanded|collector',
+);
 
-export const isReissue = (album) =>
-  REISSUE.test(`${album?.name ?? ''} ${album?.version ?? ''}`) || album?.album_type === 'live';
+const titleOf = (album) => `${album?.name ?? ''} ${album?.version ?? ''}`;
+export const isCompilation = (album) =>
+  album?.album_type === 'compilation' ||
+  album?.album_type === 'soundtrack' ||
+  COMPILATION.test(titleOf(album));
+export const isLive = (album) =>
+  album?.album_type === 'live' ||
+  LIVE.test(titleOf(album)) ||
+  LIVE_TAG.test(String(album?.name ?? '')) ||
+  /(?<!\p{L})live(?!\p{L})/iu.test(String(album?.version ?? ''));
+export const isReissue = (album) => REISSUE.test(titleOf(album));
+
+/**
+ * The title of an album without what marks a reissue: the parts in
+ * brackets, what follows " - ", the reissue words; for "is there an
+ * original of this reissue".
+ */
+export function baseTitle(album) {
+  const name = String(album?.name ?? '')
+    .replace(/[([][^)\]]*[)\]]/g, ' ')
+    .replace(/\s[-–:]\s.*$/u, ' ');
+  return normalizeName(name.replace(new RegExp(REISSUE.source, 'giu'), ' '));
+}
 
 /** A year Music Assistant gives (a positive integer), else undefined. */
 const yearOf = (album) =>
   Number.isInteger(album?.year) && album.year > 0 && album.year < 10000 ? album.year : undefined;
 
 /**
- * "The latest album" of a list of albums of one artist: studio albums only
- * (album_type `album`, or `unknown` when no album is typed at all), the
- * highest release year; originals before reissues (a 2024 remaster of a 2019
- * album does not hide the 2021 album); same year: the first one Music
- * Assistant lists. `{ album, year }`, or undefined when no album has a year.
+ * "The latest album" of a list of albums of one artist:
+ * - album_type `album` (or `unknown` when no album is typed at all): never a
+ *   single, an EP, a live, a compilation nor a soundtrack as typed by Music
+ *   Assistant;
+ * - without the title words of a best-of, a compilation, a soundtrack or a
+ *   live (a studio album "Live Forever" stays);
+ * - a reissue (remaster, deluxe, edition…) is left out only when the
+ *   original of the same title is in the list: a new album out only as a
+ *   "Deluxe Edition" stays;
+ * - the highest release year; same year: the first one Music Assistant lists.
+ * `{ album, year }`, or undefined when no album kept has a year.
  */
 export function pickLatestAlbum(albums) {
   const list = (Array.isArray(albums) ? albums : []).filter(
     (album) => isPlain(album) && typeof album.uri === 'string',
   );
   const typed = list.filter((album) => album.album_type === 'album');
-  const studio = (typed.length > 0 ? typed : list).filter((album) =>
-    ALBUM_TYPES.has(album.album_type ?? 'unknown'),
+  const studio = (typed.length > 0 ? typed : list).filter(
+    (album) =>
+      ALBUM_TYPES.has(album.album_type ?? 'unknown') && !isCompilation(album) && !isLive(album),
   );
-  const dated = studio.filter((album) => yearOf(album) !== undefined);
-  if (dated.length === 0) return undefined;
-  const originals = dated.filter((album) => !isReissue(album));
-  const pool = originals.length > 0 ? originals : dated;
+  const originals = new Set(studio.filter((album) => !isReissue(album)).map(baseTitle));
+  const kept = studio.filter(
+    (album) =>
+      yearOf(album) !== undefined && (!isReissue(album) || !originals.has(baseTitle(album))),
+  );
   let best;
-  for (const album of pool) {
+  for (const album of kept) {
     if (best === undefined || yearOf(album) > yearOf(best)) best = album;
   }
-  return { album: best, year: yearOf(best) };
+  return best === undefined ? undefined : { album: best, year: yearOf(best) };
 }
 
 const artistsOf = (item) =>
@@ -299,6 +365,23 @@ export function readPlayer(raw) {
     elapsed: finite(raw.elapsed_time),
     sourceList: Array.isArray(raw.source_list) ? raw.source_list.filter(isPlain) : [],
     hidden: raw.hide_in_ui === true,
+    // The players that sound with this one (a sync leader, a group player).
+    members: [
+      ...new Set(
+        [
+          ...(Array.isArray(raw.group_members) ? raw.group_members : []),
+          ...(Array.isArray(raw.group_childs) ? raw.group_childs : []),
+        ].filter(
+          (member) =>
+            typeof member === 'string' &&
+            member &&
+            member !== id &&
+            member.length <= LIMITS.ID &&
+            // eslint-disable-next-line no-control-regex -- control characters are what is refused
+            !/[\x00-\x1f\x7f]/.test(member),
+        ),
+      ),
+    ].slice(0, LIMITS.GROUP_MEMBERS),
   };
 }
 

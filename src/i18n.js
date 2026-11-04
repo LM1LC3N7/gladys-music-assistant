@@ -48,6 +48,11 @@ export const T = {
       `Music Assistant is not set up yet: open its web interface and create the first user, tried again in ${wait(ms).en}.`,
       `Music Assistant n’est pas encore configuré : ouvrez son interface web et créez le premier utilisateur, nouvel essai dans ${wait(ms).fr}.`,
     ),
+  rejected: (code, ms) =>
+    both(
+      `Music Assistant refused the connection (error ${Number.isInteger(code) ? code : '?'}), not the token: tried again in ${wait(ms).en}.`,
+      `Music Assistant a refusé la connexion (erreur ${Number.isInteger(code) ? code : '?'}), pas le jeton : nouvel essai dans ${wait(ms).fr}.`,
+    ),
   tooOld: (version, ms) =>
     both(
       `Music Assistant ${version} is too old: version 2.8 or later is needed. Tried again in ${wait(ms).en}.`,
@@ -99,6 +104,10 @@ export const T = {
   badValue: 'Invalid value',
   busy: 'Too many commands waiting for Music Assistant, try again',
   noAnswer: 'Sent to Music Assistant, no answer in time',
+  sentClosed: 'Sent to Music Assistant, the connection closed before its answer',
+  tooLate: 'Music Assistant is too slow: nothing more was sent, try again',
+  volumeUnknown: (name) =>
+    `The volume of "${name}" is unknown in Music Assistant: nothing played, so as not to go above the volume cap`,
   failed: (details) => `Music Assistant refused the command${details ? `: ${details}` : ''}`,
   permission: 'The token of Music Assistant does not allow this command (role of its user)',
   emptyQuery: 'Type what to look for',

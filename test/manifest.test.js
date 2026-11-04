@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { DEFAULT_CONFIG } from '../src/config.js';
 import { ACTIONS, FEATURE, KINDS, PROVIDERS, SCENE_ACTIONS } from '../src/constants.js';
-import { buildDevice } from '../src/devices.js';
+import { buildDevice, mergeWithCreated } from '../src/devices.js';
 import { readPlayer } from '../src/ma/model.js';
 import { player } from './helpers/fakeMa.js';
 
@@ -238,4 +238,42 @@ test('nothing logs a token: no token nor body reaches a logger', () => {
     assert.doesNotMatch(code, /logger\.\w+\([^)]*(token|details|body|args)/i, file);
     assert.doesNotMatch(code, /console\./, file);
   }
+});
+
+test('every published feature has a finite min and max, min <= max, the max of its type', () => {
+  const maxOf = {
+    playback_state: 2,
+    repeat: 2,
+    volume: 100,
+    position: 604800,
+    duration: 604800,
+  };
+  const full = buildDevice(fakeGladys, readPlayer(player('aa', 'Salon')));
+  const fixed = buildDevice(
+    fakeGladys,
+    readPlayer(
+      player('bb', 'Fixed', {
+        supported_features: [],
+        volume_control: 'none',
+        mute_control: 'none',
+        volume_level: null,
+      }),
+    ),
+  );
+  // A created device whose player lost its volume keeps it, with its numbers.
+  const merged = mergeWithCreated(fixed, { ...full, features: full.features });
+  for (const device of [full, fixed, merged]) {
+    for (const feature of device.features) {
+      const key = feature.external_id.split(':').at(-1);
+      assert.ok(Number.isFinite(feature.min), `${key}.min`);
+      assert.ok(Number.isFinite(feature.max), `${key}.max`);
+      assert.ok(feature.min <= feature.max, key);
+      assert.equal(feature.min, 0, key);
+      if (key in maxOf) assert.equal(feature.max, maxOf[key], key);
+      else if (feature.read_only) assert.equal(feature.max, 0, key);
+      else assert.equal(feature.max, 1, key);
+      if (key === 'position' || key === 'duration') assert.equal(feature.unit, 'seconds', key);
+    }
+  }
+  assert.ok(merged.features.some((f) => f.external_id.endsWith(':volume')));
 });

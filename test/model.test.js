@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { artworkKey, validateMediaItems } from '@gladysassistant/integration-sdk';
 import {
+  isCompilation,
+  isLive,
   isReissue,
   itemDomains,
   nowPlaying,
@@ -78,11 +80,10 @@ test('the latest album: the year decides, then the order of Music Assistant', ()
   assert.equal(pickLatestAlbum([album('bad', 2030.5), album('ok', 2000)]).album.name, 'ok');
 });
 
-test('reissues, lives and special editions are told apart, in French too', () => {
+test('reissues, lives and compilations are told apart by type and title words, in French too', () => {
   for (const name of [
     'Courage (Deluxe Edition)',
     'Courage (Deluxe)',
-    'Live à Paris',
     'Album (Remastered 2024)',
     'Réédition',
     'D’eux (Édition collector)',
@@ -90,11 +91,103 @@ test('reissues, lives and special editions are told apart, in French too', () =>
   ]) {
     assert.ok(isReissue({ name }), name);
   }
-  for (const name of ['Courage', 'Olivia', 'Delivery', 'Alive', 'Éditions du soir']) {
+  for (const name of [
+    'Courage',
+    'Olivia',
+    'Delivery',
+    'Alive',
+    'Éditions du soir',
+    'Live Forever',
+  ]) {
     assert.ok(!isReissue({ name }), name);
   }
-  assert.ok(isReissue({ name: 'X', album_type: 'live' }));
   assert.ok(isReissue({ name: 'X', version: 'Remastered' }));
+  for (const name of [
+    'Live à Paris',
+    'Live at Wembley',
+    'Courage (Live)',
+    'Tour - Live',
+    'En concert',
+    'Unplugged',
+    'Live 1999',
+  ]) {
+    assert.ok(isLive({ name }), name);
+  }
+  for (const name of ['Live Forever', 'Alive', 'Delivery', 'Olivia', 'Liveliness']) {
+    assert.ok(!isLive({ name }), name);
+  }
+  assert.ok(isLive({ name: 'X', album_type: 'live' }));
+  assert.ok(isLive({ name: 'X', version: 'Live' }));
+  for (const name of [
+    'Best Of',
+    'The Very Best of Céline Dion',
+    'Greatest Hits',
+    'Les plus grands succès',
+    'The Collection',
+    'Anthology',
+    'The Essential',
+    'L’essentiel',
+    'Titanic (Original Motion Picture Soundtrack)',
+    'Bande originale du film',
+    'Le film (B.O.)',
+    'OST',
+  ]) {
+    assert.ok(isCompilation({ name }), name);
+  }
+  for (const name of ['Courage', 'Ghost', 'Hostile', 'Bestial', 'Collectionneur']) {
+    assert.ok(!isCompilation({ name }), name);
+  }
+  // The types of Music Assistant 2.10.9 (music_assistant_models AlbumType: album,
+  // single, live, soundtrack, compilation, ep, unknown).
+  assert.ok(isCompilation({ name: 'X', album_type: 'compilation' }));
+  assert.ok(isCompilation({ name: 'X', album_type: 'soundtrack' }));
+});
+
+test('the latest album, honest cases: "Live" in a studio title, a new album out only as Deluxe, best-ofs typed album', () => {
+  const album = (name, year, extra = {}) => ({
+    uri: `p://album/${name}`,
+    name,
+    year,
+    album_type: 'album',
+    ...extra,
+  });
+  const pick = (list) => pickLatestAlbum(list)?.album.name;
+  assert.equal(pick([album('Encore', 2016), album('Live Forever', 2024)]), 'Live Forever');
+  assert.equal(
+    pick([album('Encore', 2016), album('Nouveau (Deluxe Edition)', 2025)]),
+    'Nouveau (Deluxe Edition)',
+  );
+  assert.equal(
+    pick([album('Encore', 2016), album('Nouveau', 2025, { version: 'Édition Collector' })]),
+    'Nouveau',
+  );
+  // A reissue of an album in the list: left out (the original keeps its year).
+  assert.equal(
+    pick([album('Courage', 2019), album('Courage (Deluxe Edition)', 2021), album('Encore', 2016)]),
+    'Courage',
+  );
+  assert.equal(pick([album('Courage', 2019), album('Courage - Remastered 2024', 2024)]), 'Courage');
+  assert.equal(
+    pick([
+      album('Courage', 2019),
+      album('Best Of', 2025),
+      album('Greatest Hits', 2024),
+      album('Titanic (Original Motion Picture Soundtrack)', 2023),
+      album('Live à Paris', 2022),
+      album('Courage (Live)', 2021),
+      album('Love Again', 2023, { album_type: 'single' }),
+      album('Hits', 2026, { album_type: 'compilation' }),
+      album('Film', 2026, { album_type: 'soundtrack' }),
+      album('EP', 2026, { album_type: 'ep' }),
+      album('Show', 2026, { album_type: 'live' }),
+    ]),
+    'Courage',
+  );
+  // A reissue whose original has no year is still left out for the original's sake.
+  assert.equal(
+    pick([album('Courage', null), album('Courage (Remastered)', 2024), album('Encore', 2016)]),
+    'Encore',
+  );
 });
 
 test('the best match: an exact name (accents aside), else the first; restricted to a provider', () => {

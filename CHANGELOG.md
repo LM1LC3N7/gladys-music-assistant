@@ -27,9 +27,18 @@ First version, 0.1.0 (not published yet).
 - Scene actions: play by search (track, album, playlist, artist, latest album
   of an artist, artist radio, radio station) with a preferred provider
   (Qobuz, Spotify or automatic), set the volume, group, ungroup.
-- A volume cap (60 % by default): no command sets a louder volume, and a
-  louder player is brought down to it before Gladys starts playback, unmutes
-  or groups it; a lower volume, pause, stop and mute are never held.
+- A volume cap (60 % by default): no command sets a louder volume (a group
+  player is set member by member); before Gladys starts sound (play, next,
+  previous, play a media, queue jump, play by search), unmutes or groups a
+  player, the players that would sound louder, group members and leader
+  included, are brought down to it, and an unknown volume is read again or
+  nothing plays; a lower volume, pause, stop and mute are not held by it.
+- A time budget per call of Gladys (4.5 s for a command, 8.5 s for the music
+  player, 27 s for "play by search"): past it nothing more is sent, so nothing
+  starts after Gladys stopped waiting.
+- "The latest album": Music Assistant types plus title words (best-of,
+  compilation, soundtrack, live), a reissue left out only when its original
+  is listed.
 - Configuration buttons: "Test the connection" (version, Qobuz and Spotify,
   music providers, players) and "Find Music Assistant" (mDNS through Gladys).
 - The Docker image carries its manifest as a label, for the developer mode of

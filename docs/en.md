@@ -78,7 +78,9 @@ provider up for you: Music Assistant holds the relation with these services.
 2. **Music Assistant address**: `http://192.168.1.20:8095`, or just
    `192.168.1.20` (port 8095 by default). The **Find Music Assistant** button
    looks for the server on the local network (mDNS `_mass._tcp`, through
-   Gladys) and fills the address in when exactly one server answers.
+   Gladys) and fills the address in when exactly one server answers. Check
+   the address found: a device of the local network could pose as Music
+   Assistant.
 3. **Long-lived token**: paste the token. It is kept by Gladys in its
    database, never shown again, sent only to your Music Assistant server.
 4. **Volume cap** (60 % by default): see below.
@@ -101,26 +103,44 @@ provider up for you: Music Assistant holds the relation with these services.
 - "too old" (before 2.8) or "changed its API" (update the integration).
 - "refused the token": revoked, expired or mistyped. The integration then
   **stops trying**, even after a restart (it keeps in `/data` only a 2-hex
-  marker, never the token). It tries again when you save a new token, or when
-  **Test the connection** succeeds with the saved token.
+  marker, never the token). It tries again when you save the configuration
+  (new token or not), or when **Test the connection** succeeds with the saved
+  token.
+- "refused the connection (error N), not the token": another refusal at the
+  welcome of Music Assistant; tried again later.
 
 ## The volume cap
 
 No command of the integration sets a volume above the cap (1 to 100 %, 60 %
 by default, 100 = no cap):
 
-- a louder volume asked by the dashboard or a scene is set to the cap;
-- before **starting playback** (play, play a media, jump in the queue, play by
-  search), **unmuting** or **adding a player to a group**, a player set louder
-  in Music Assistant is first brought down to the cap; when that fails,
-  nothing is started.
+- a louder volume asked by the dashboard or a scene is set to the cap; on a
+  Music Assistant **group player**, the volume is set member by member (each
+  at most at the cap), not on the group;
+- before **starting sound** (play, previous, next, play a media, jump in the
+  queue, play by search), **unmuting** or **adding a player to a group**, the
+  integration brings down to the cap the player set louder in Music
+  Assistant, **the members of its group** and, when it plays in a group, its
+  leader and the other members;
+- an unknown volume is read again from Music Assistant; still unknown,
+  nothing is started ("volume is unknown"); when lowering fails, nothing is
+  started either.
 
-A lower volume, pause, stop and mute are **never** held: neither by the cap
-nor by the commands waiting. They fail only when Music Assistant cannot be
-reached or does not answer, no longer knows the player, the player has no
-volume or mute, or Music Assistant itself refuses the command. The volume
-set in the Music Assistant app itself is not changed as long as Gladys plays
-nothing.
+A lower volume, pause, stop and mute are held neither by the cap nor by the
+commands waiting (up to 128 commands in flight). They fail only when Music
+Assistant cannot be reached or does not answer, no longer knows the player,
+the player has no volume or mute, or Music Assistant itself refuses the
+command. The volume set in the Music Assistant app itself is not changed as
+long as Gladys plays nothing.
+
+### Time limits
+
+Gladys waits 5 s for a command, 10 s for a player request (browse, search,
+play, queue) and the declared timeout of a scene action (30 s for "play by
+search"). The integration gives itself a slightly shorter budget (4.5 s,
+8.5 s, 27 s) for all the requests of one call: past it, it sends nothing more
+and answers "Music Assistant is too slow". A command that starts sound is
+sent only with at least 1.5 s left.
 
 ## The music player
 
@@ -160,13 +180,25 @@ the player directly:
    "Céline Dion", what to play "Latest album of the artist", provider "Qobuz
    first".
 3. The integration finds the artist, reads its albums **on that provider**,
-   keeps the studio albums (no single, EP, live, compilation nor soundtrack),
-   leaves reissues out (remaster, deluxe, edition…) when an original exists,
-   and plays the one of the latest year.
+   and chooses this way:
+   - the **type** Music Assistant gives: album (never a single, EP, live,
+     compilation nor soundtrack **when Music Assistant types them so**);
+   - **words of the title**: "Best of", "Greatest Hits", "Les plus grands
+     succès", "Collection", "Anthology", "Essentials", "Bande originale",
+     "Soundtrack", "OST" leave an album out; so do "Live at…", "(Live)",
+     "En concert", "Unplugged" (a studio album named "Live Forever" stays);
+   - a **reissue** (remaster, deluxe, edition…) is left out only when the
+     original of the same title is in the list: a new album out only as a
+     "Deluxe Edition" stays;
+   - then the **latest year** (same year: the order of Music Assistant).
 
-Limits: according to its code, Music Assistant reads at most the first 100
-releases of a Qobuz artist; when no album has a year, the action says so
-instead of playing one at random.
+This choice rests only on the type of Music Assistant and on these words: it
+can be wrong, for instance on a live album without a telltale word ("Au
+Palais Omnisports"), a best-of with a neutral title, or a reissue with a
+changed title. The outputs of the action (title, year, provider) show what
+was played. According to its code, Music Assistant reads at most the first
+100 releases of a Qobuz artist; when no album kept has a year, the action
+says so instead of playing one at random.
 
 ### Music Assistant: set the volume
 

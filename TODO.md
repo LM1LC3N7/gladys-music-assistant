@@ -3,8 +3,8 @@
 ## Status
 
 Version 0.1.0, not published (no tag, no topic: not in the store). Built for
-Louis's tests in developer mode. Review steps of `~/code/integrations/CLAUDE.md`
-not run yet (relecture `high`).
+Louis's tests in developer mode (image `:dev` on GHCR). Review r1 (`high`):
+À CORRIGER, corrections in the commit after b6dd31b (see below); r2 to come.
 
 ## Decisions
 
@@ -22,22 +22,37 @@ not run yet (relecture `high`).
 - **No polling**: the picture comes from `players/all`, `player_queues/all`
   and `providers` after each authentication, then from the events.
   `queue_time_updated` (every second) is ignored.
-- **Volume cap 60 % by default.** Also applied before play / play media / queue
-  jump / play by search / unmute / group: a louder player is lowered first,
-  and nothing plays when that fails.
+- **Volume cap 60 % by default.** Also applied before play / previous / next /
+  play media / queue jump / play by search / unmute / group: the players that
+  would sound (the player, its group members, its leader and the leader's
+  members when it plays in a group) are lowered first; a volume unknown is
+  read again (`players/get`), still unknown: nothing plays; nothing plays when
+  lowering fails. A group player (`type: group`) gets its volume member by
+  member. Seek, shuffle, repeat do not lower (no start of playback meant):
+  to watch in the real tests.
+- **Budgets per call of Gladys** (r1, I1): 4.5 s command, 8.5 s music player,
+  27 s play_search, 8 s set_volume, 13 s group/ungroup, 18 s connection test;
+  each request gets at most what is left, a command with an effect needs
+  1.5 s left, urgent ones (pause, stop, mute, lower volume) are only bounded.
 - **Preferred provider**: search `providers: ["library", <domain>]` and keep
   the items playable from that domain (never `providers: [<domain>]` alone:
   Music Assistant then drops the provider items already in the library),
   play the provider's own copy (`<instance>://<type>/<id>`); nothing there or
   provider not set up: every provider. Output `provider` says which one played.
-- **Latest album**: the artist's albums on its provider (`artist_albums` on the
-  provider mapping, never the library alone which only holds favorites),
-  studio albums (`album`, or `unknown` when nothing is typed), originals before
-  reissues (remaster, deluxe, edition, live…), highest year; no year at all:
-  a clear error, never a random album.
+- **Latest album** (r1, I2): the artist's albums on its provider
+  (`artist_albums` on the provider mapping, never the library alone which only
+  holds favorites); Music Assistant types (AlbumType of 2.10.9: album, single,
+  live, soundtrack, compilation, ep, unknown) and title words (best-of,
+  compilation, soundtrack, live: `src/ma/model.js`); a reissue left out only
+  when its original (same base title) is listed; highest year; no year: a
+  clear error. Can be wrong (said in the docs).
 - **Refused token**: remembered in `/data` by a 2-hex marker of a salted
-  SHA-256 (fiche: truncated print, no token); lifted by a new token or a
-  successful connection test.
+  SHA-256 (fiche: truncated print, no token); lifted by saving the
+  configuration (any save: a new token has 1 chance in 256 of the same
+  marker) or a successful connection test. Another error at the welcome of
+  Music Assistant (not 503) is not a refusal: tried again with the backoff.
+- **Backoff** 2 s doubled up to 5 min; back to 2 s only after a session that
+  lived 60 s.
 - **Artwork**: only from `<configured address>/imageproxy/<id>` (the host of
   the `image_url` of Music Assistant is its internal URL, often a Docker IP),
   JPEG 512 px (256 px in lists), 300 KB max, retried at 256 px when too large.
@@ -93,6 +108,23 @@ of an artist: all killed.
    reconnexion et état à jour.
 9. « Trouver Music Assistant » depuis Gladys (mDNS sur le réseau de pve01).
 10. Droits : un utilisateur de rôle plus limité que « user » suffit-il ?
+
+## Review r1: done and left
+
+Done: B1 (next/previous, group members, unknown volume), B2 (finite min/max
+test), I1 (budgets), I2 (latest album and docs), I4 (tests for the r1
+survivors), minors 1 (welcome error), 2 (refusal forgotten on save), 3
+(stable session before resetting the backoff), 4 ("sent, the connection
+closed"), 5 (capped volume published again), 7 (128 commands in flight in the
+docs), 8 (mDNS spoofing said in the docs), 9 (this file).
+
+Left: minor 6, `elapsed_time_last_updated` not read: if Music Assistant does
+not refresh `elapsed_time` on each event, the position may lag; to check in a
+real playback at Louis's.
+
+Mutations r1 (one at a time, whole suite): 31 mutants on B1, B2, I1, I2, I4 and
+the minors, all killed; the redundant slice of the partial parts was removed
+(equivalent mutant).
 
 ## Later
 

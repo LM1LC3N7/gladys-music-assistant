@@ -85,7 +85,9 @@ relation avec ces services.
 2. **Adresse de Music Assistant** : `http://192.168.1.20:8095`, ou simplement
    `192.168.1.20` (port 8095 par défaut). Le bouton **Trouver Music
    Assistant** cherche le serveur sur le réseau local (mDNS `_mass._tcp`, par
-   Gladys) et remplit l'adresse quand un seul serveur répond.
+   Gladys) et remplit l'adresse quand un seul serveur répond. Vérifiez
+   l'adresse trouvée : un appareil du réseau local pourrait se faire passer
+   pour Music Assistant.
 3. **Jeton longue durée** : collez le jeton. Il est gardé par Gladys dans sa
    base, jamais réaffiché, envoyé seulement à votre serveur Music Assistant.
 4. **Plafond de volume** (60 % par défaut) : voir plus bas.
@@ -112,8 +114,10 @@ relation avec ces services.
 - « a refusé le jeton » : jeton révoqué, expiré ou mal recopié. L'intégration
   **arrête alors d'essayer**, même après un redémarrage (elle ne garde dans
   `/data` qu'une marque de 2 caractères hexadécimaux, jamais le jeton). Elle
-  réessaie quand vous enregistrez un nouveau jeton, ou quand **Tester la
-  connexion** réussit avec le jeton enregistré.
+  réessaie quand vous enregistrez la configuration (nouveau jeton ou non), ou
+  quand **Tester la connexion** réussit avec le jeton enregistré.
+- « a refusé la connexion (erreur N), pas le jeton » : autre refus à
+  l'accueil de Music Assistant ; nouvel essai plus tard.
 
 ## Le plafond de volume
 
@@ -121,18 +125,33 @@ Aucune commande de l'intégration ne règle un volume au-dessus du plafond
 (1 à 100 %, 60 % par défaut, 100 = pas de plafond) :
 
 - un volume plus fort demandé par le tableau de bord ou une scène est ramené
-  au plafond ;
-- avant de **lancer la lecture** (lecture, jouer un média, sauter dans la
-  file, jouer par recherche), de **couper la sourdine** ou d'**ajouter un
-  lecteur à un groupe**, un lecteur réglé plus fort dans Music Assistant est
-  d'abord ramené au plafond ; si ce réglage échoue, rien n'est lancé.
+  au plafond ; sur un **lecteur de type groupe** de Music Assistant, le volume
+  est réglé membre par membre (chacun au plus au plafond), pas sur le groupe ;
+- avant de **lancer du son** (lecture, précédent, suivant, jouer un média,
+  sauter dans la file, jouer par recherche), de **couper la sourdine** ou
+  d'**ajouter un lecteur à un groupe**, l'intégration ramène au plafond le
+  lecteur réglé plus fort dans Music Assistant, **les membres de son groupe**
+  et, s'il joue dans un groupe, son meneur et les autres membres ;
+- un volume inconnu est relu dans Music Assistant ; toujours inconnu, rien
+  n'est lancé (message « volume inconnu ») ; si l'abaissement échoue, rien
+  n'est lancé non plus.
 
-Une baisse de volume, la pause, l'arrêt et la sourdine ne sont **jamais**
-retenus : ni par le plafond, ni par les commandes en attente. Ils échouent
-seulement si Music Assistant est injoignable ou ne répond pas, s'il ne connaît
-plus le lecteur, si le lecteur n'a pas de volume ou de sourdine, ou si Music
-Assistant refuse lui-même la commande. Le volume réglé dans l'application Music Assistant elle-même n'est
-pas modifié tant que Gladys ne fait rien jouer.
+Une baisse de volume, la pause, l'arrêt et la sourdine ne sont retenus ni par
+le plafond, ni par les commandes en attente (jusqu'à 128 commandes en vol).
+Ils échouent seulement si Music Assistant est injoignable ou ne répond pas,
+s'il ne connaît plus le lecteur, si le lecteur n'a pas de volume ou de
+sourdine, ou si Music Assistant refuse lui-même la commande. Le volume réglé
+dans l'application Music Assistant elle-même n'est pas modifié tant que
+Gladys ne fait rien jouer.
+
+### Délais
+
+Gladys attend 5 s une commande, 10 s une demande du lecteur (parcourir,
+chercher, jouer, file) et le délai déclaré d'une action de scène (30 s pour
+« jouer par recherche »). L'intégration se donne un budget un peu plus court
+(4,5 s, 8,5 s, 27 s) pour toutes les requêtes d'un même appel : passé ce
+budget, elle n'envoie plus rien et répond « Music Assistant est trop lent ».
+Une commande qui lance du son n'est envoyée que s'il reste au moins 1,5 s.
 
 ## Le lecteur de musique
 
@@ -173,12 +192,26 @@ utilisent directement le lecteur :
    texte « Céline Dion », quoi jouer « Dernier album de l'artiste »,
    fournisseur « Qobuz d'abord ».
 3. L'intégration trouve l'artiste, lit ses albums **chez ce fournisseur**,
-   garde les albums studio (ni single, ni EP, ni live, ni compilation, ni
-   bande originale), écarte les rééditions (remaster, deluxe, édition…) quand
-   un original existe, et joue celui de l'année la plus récente.
+   et choisit ainsi :
+   - le **type** donné par Music Assistant : album (jamais single, EP, live,
+     compilation ni bande originale **quand Music Assistant les type ainsi**) ;
+   - des **mots du titre** : « Best of », « Greatest Hits », « Les plus grands
+     succès », « Collection », « Anthology », « Essentials », « Bande
+     originale », « Soundtrack », « OST » écartent un album ; « Live at… »,
+     « (Live) », « En concert », « Unplugged » aussi (un album studio nommé
+     « Live Forever » reste) ;
+   - une **réédition** (remaster, deluxe, édition…) n'est écartée que si
+     l'original du même titre est dans la liste : un nouvel album sorti
+     seulement en « Deluxe Edition » reste ;
+   - puis l'**année la plus récente** (à égalité : l'ordre de Music Assistant).
 
-Limites : d'après son code, Music Assistant lit au plus les 100 premières
-sorties d'un artiste Qobuz ; si aucun album n'a d'année, l'action le dit au lieu de jouer au hasard.
+Ce tri repose seulement sur le type de Music Assistant et sur ces mots : il
+peut se tromper, par exemple sur un live sans mot révélateur (« Au Palais
+Omnisports »), un best-of au titre neutre, ou une réédition au titre changé.
+Les sorties de l'action (titre, année, fournisseur) montrent ce qui a été joué.
+D'après son code, Music Assistant lit au plus les 100 premières sorties d'un
+artiste Qobuz ; si aucun album gardé n'a d'année, l'action le dit au lieu de
+jouer au hasard.
 
 ### Music Assistant : régler le volume
 

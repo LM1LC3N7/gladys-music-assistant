@@ -137,6 +137,7 @@ export function catalog() {
         album('qobuz--Q1', 'qz-love', 'Love Again', 2023, 'single'),
         album('qobuz--Q1', 'qz-best', 'The Best So Far', 2025, 'compilation'),
         album('qobuz--Q1', 'qz-remaster', 'S’il suffisait d’aimer (Remastered)', 2024),
+        album('qobuz--Q1', 'qz-ssda', 'S’il suffisait d’aimer', 1998),
       ],
       'spotify--S1/4S9EykWX': [
         album('spotify--S1', 'sp-encore', 'Encore un soir', 2016),
@@ -276,6 +277,13 @@ export async function fakeMa(options = {}) {
       srv.images += 1;
       srv.lastImage = url.pathname + url.search;
       const body = typeof srv.imageBytes === 'function' ? srv.imageBytes(url) : srv.imageBytes;
+      if (srv.chunked) {
+        // No content-length: the size is only known by reading.
+        res.writeHead(200, { 'content-type': srv.imageType });
+        for (let i = 0; i < body.length; i += 16384) res.write(body.subarray(i, i + 16384));
+        res.end();
+        return;
+      }
       res.writeHead(200, { 'content-type': srv.imageType, 'content-length': body.length });
       res.end(body);
       return;
@@ -458,7 +466,11 @@ export async function fakeMa(options = {}) {
     socket.send(JSON.stringify(srv.info));
     if (srv.setupRequired) {
       socket.send(
-        JSON.stringify({ message_id: 'connection', error_code: 503, details: 'Setup required' }),
+        JSON.stringify({
+          message_id: 'connection',
+          error_code: srv.setupRequired === true ? 503 : srv.setupRequired,
+          details: 'Setup required',
+        }),
       );
       socket.close();
       return;
@@ -510,7 +522,7 @@ export async function fakeMa(options = {}) {
         return;
       }
       try {
-        const result = await handler(args, srv);
+        const result = await handler(args, srv, { socket, id });
         if (result === srv.SILENT) return;
         answer(socket, id, result ?? null);
       } catch (err) {
@@ -528,6 +540,12 @@ export async function fakeMa(options = {}) {
   await new Promise((resolve) => http.listen(0, '127.0.0.1', resolve));
   srv.port = http.address().port;
   srv.url = `http://127.0.0.1:${srv.port}`;
+  /** A promise the test resolves: a handler answering when the test says so. */
+  srv.gate = () => {
+    let release;
+    const promise = new Promise((resolve) => (release = resolve));
+    return { promise, release };
+  };
   srv.count = (command) => srv.received.filter((r) => r.command === command).length;
   srv.last = (command) => srv.received.filter((r) => r.command === command).at(-1)?.args;
   /** Closes every client connection (as a Music Assistant restart). */
